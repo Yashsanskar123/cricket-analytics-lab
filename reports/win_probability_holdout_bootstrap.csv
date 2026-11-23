@@ -1,0 +1,22 @@
+over,challenger,reference,n_matches,gain,ci_lo,ci_hi,verdict
+1,Logistic: required-rate gap only,Base rate (same % every time),70,-0.1266505174042365,-0.38185942757958685,0.08267257496290678,noise
+1,Logistic (full state),Logistic: required-rate gap only,70,0.1888807588362561,-0.051115672270654736,0.45724796859054667,noise
+1,Gradient boosting,Logistic (full state),70,-0.08077397980710625,-0.2445016729911581,0.07062964700877969,noise
+3,Logistic: required-rate gap only,Base rate (same % every time),70,0.05706924705474402,-0.10987945809217842,0.20643333893796037,noise
+3,Logistic (full state),Logistic: required-rate gap only,70,0.06314764240291977,-0.10964950219619604,0.2544199341636945,noise
+3,Gradient boosting,Logistic (full state),70,-0.04822465066090902,-0.17743263510814722,0.07467464075612999,noise
+6,Logistic: required-rate gap only,Base rate (same % every time),70,0.2416127409287804,0.13077672473825996,0.33508015967865534,challenger better
+6,Logistic (full state),Logistic: required-rate gap only,70,0.061663159021303815,-0.05641515667993598,0.18649029554901383,noise
+6,Gradient boosting,Logistic (full state),70,-0.04388988795666261,-0.15033575831710178,0.056330902576957484,noise
+10,Logistic: required-rate gap only,Base rate (same % every time),69,0.2791426986371255,0.18994826136593837,0.35500501016443964,challenger better
+10,Logistic (full state),Logistic: required-rate gap only,69,0.06997463148956716,-0.01681003389730039,0.1621644413002382,noise
+10,Gradient boosting,Logistic (full state),69,-0.08354175122119133,-0.20114239982810214,0.029729391020164583,noise
+15,Logistic: required-rate gap only,Base rate (same % every time),65,0.38461401438052073,0.29106395887026854,0.4646708427794493,challenger better
+15,Logistic (full state),Logistic: required-rate gap only,65,0.05777713382988318,0.009253887222717916,0.113523177952736,challenger better
+15,Gradient boosting,Logistic (full state),65,-0.03144740919977168,-0.14385686978108655,0.07249024915387242,noise
+18,Logistic: required-rate gap only,Base rate (same % every time),50,0.448572634829774,0.30778791968749614,0.5594130130552974,challenger better
+18,Logistic (full state),Logistic: required-rate gap only,50,0.06448890897799478,0.02766240448843754,0.11039653418869755,challenger better
+18,Gradient boosting,Logistic (full state),50,0.006659396901251196,-0.04296372633554803,0.05456333541195471,noise
+ALL,Logistic: required-rate gap only,Base rate (same % every time),70,0.262334680327067,0.1736876882235786,0.3369842751300969,challenger better
+ALL,Logistic (full state),Logistic: required-rate gap only,70,0.07375526282255093,-0.01037547895496817,0.16433482612870542,noise
+ALL,Gradient boosting,Logistic (full state),70,-0.046827878429590276,-0.1435094003984944,0.04504112414913735,noise

@@ -1,0 +1,8 @@
+task,unit,challenger,reference,gain,ci_lo,ci_hi,verdict
+A. pre-match total,runs,League + venue + XI,League + venue (no XI),0.16331781452976069,-0.1616928295355709,0.4646477644575569,noise
+B. live total,runs,Ridge + XI strength,Ridge (match state only),0.11822729128807624,-0.047978674577887744,0.26906227140860844,noise
+B. live total,runs,Ridge + XI + remaining batters,Ridge + XI strength,-0.011741734778473746,-0.05255132453513263,0.02899818851266166,noise
+B. live total,runs,Ridge + XI + remaining batters,Ridge (match state only),0.10648555650960255,-0.0673834052617284,0.25982777403053237,noise
+C. chase win prob,log loss,Logistic + XI strength,Logistic (match state only),-0.0029805251341665276,-0.010662259673599446,0.004348687568914548,noise
+C. chase win prob,log loss,Logistic + XI + remaining batters,Logistic + XI strength,-0.0024365192708606077,-0.0066188600392118185,0.0013971217965726879,noise
+C. chase win prob,log loss,Logistic + XI + remaining batters,Logistic (match state only),-0.005417044405027135,-0.014617570893890592,0.0033040251218212696,noise

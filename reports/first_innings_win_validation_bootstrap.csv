@@ -1,0 +1,29 @@
+over,challenger,reference,n_matches,gain,ci_lo,ci_hi,verdict
+1,Score distribution -> win prob (connected),Point forecast -> win prob,342,0.014859225123384672,-0.0005420095910014436,0.030065581614261774,noise
+1,Score distribution -> win prob (connected),Direct logistic on state,342,-0.0013047722959215937,-0.015775277584594908,0.012637246394919631,noise
+1,Score distribution -> win prob (connected),Base rate (same % every time),342,-0.010063011727807492,-0.02695093077849301,0.007080977196053159,noise
+1,Direct logistic on state,Base rate (same % every time),342,-0.008758239431885894,-0.024990877145789025,0.00824843231464058,noise
+3,Score distribution -> win prob (connected),Point forecast -> win prob,342,0.008793736162257568,-0.00524728675207687,0.022376960391646265,noise
+3,Score distribution -> win prob (connected),Direct logistic on state,342,-0.001448478945253761,-0.014242637286069965,0.010762395711622156,noise
+3,Score distribution -> win prob (connected),Base rate (same % every time),342,0.00831469912361551,-0.017427183749952124,0.03131704829086337,noise
+3,Direct logistic on state,Base rate (same % every time),342,0.009763178068869267,-0.01516475832681626,0.0336487467048098,noise
+6,Score distribution -> win prob (connected),Point forecast -> win prob,342,0.0014067440000827412,-0.006772972387915841,0.009816747294346012,noise
+6,Score distribution -> win prob (connected),Direct logistic on state,342,-0.004401316555651281,-0.017311817815132313,0.008260683985443761,noise
+6,Score distribution -> win prob (connected),Base rate (same % every time),342,0.04222291817349578,0.00936282308952293,0.07253977325826061,challenger better
+6,Direct logistic on state,Base rate (same % every time),342,0.04662423472914706,0.012763591616079954,0.0779079103829835,challenger better
+10,Score distribution -> win prob (connected),Point forecast -> win prob,342,0.00044626345962952906,-0.0065660246873349625,0.007556669493640934,noise
+10,Score distribution -> win prob (connected),Direct logistic on state,342,-0.002481054433858529,-0.017087593438133233,0.010956094218416855,noise
+10,Score distribution -> win prob (connected),Base rate (same % every time),342,0.06537948444567435,0.029098941420839495,0.09934603742688317,challenger better
+10,Direct logistic on state,Base rate (same % every time),342,0.06786053887953288,0.03215170287718265,0.10238252105491655,challenger better
+15,Score distribution -> win prob (connected),Point forecast -> win prob,341,-0.0018190514096822123,-0.0064865276045882264,0.00305957402535882,noise
+15,Score distribution -> win prob (connected),Direct logistic on state,341,-0.004056466731371644,-0.020577871289891258,0.012087294447012082,noise
+15,Score distribution -> win prob (connected),Base rate (same % every time),341,0.09576002221552678,0.05203852943765739,0.13709282698759045,challenger better
+15,Direct logistic on state,Base rate (same % every time),341,0.09981648894689842,0.05720881620841573,0.14007509176450803,challenger better
+18,Score distribution -> win prob (connected),Point forecast -> win prob,335,-0.001611981684667422,-0.004010463322733595,0.0009152093261628963,noise
+18,Score distribution -> win prob (connected),Direct logistic on state,335,-0.001402372660439931,-0.020226186814410678,0.016918010514643988,noise
+18,Score distribution -> win prob (connected),Base rate (same % every time),335,0.10319568610252759,0.05467413012439837,0.14851437471705672,challenger better
+18,Direct logistic on state,Base rate (same % every time),335,0.10459805876296753,0.056481335566671086,0.1517951027330593,challenger better
+ALL,Score distribution -> win prob (connected),Point forecast -> win prob,342,0.0016160972601672956,-0.004968077392209582,0.008158557909998962,noise
+ALL,Score distribution -> win prob (connected),Direct logistic on state,342,-0.002140525398608021,-0.016116561253001527,0.010929961143053571,noise
+ALL,Score distribution -> win prob (connected),Base rate (same % every time),342,0.06300782483215774,0.0320623478399642,0.09308250682862569,challenger better
+ALL,Direct logistic on state,Base rate (same % every time),342,0.06514835023076575,0.03457243841331925,0.09611256913398732,challenger better

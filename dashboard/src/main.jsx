@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import ReactDOM from "react-dom/client";
+import PlayerIntelligence from "./PlayerIntelligence.jsx";
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ReferenceLine,
   ReferenceArea, BarChart, Bar, Cell, ComposedChart, Area, ScatterChart, Scatter,
@@ -13,7 +14,7 @@ import { verdictOf, FUNNEL, OVERS, MODELS, FI_VAL_LL, FI_VAL_ACC, FI_HOLD_LL, FI
 
 
 import { f2s, f3s, pct, store, copyText, toCsv, usePalette, PalCtx, usePal, seriesColors, Chip, Seg, Card, Kpi, CopyBtn, VerdictChip, ChartTip, axisProps, Empty, SourceChip, Forest, GainMap, ByOver, Field, Num, Gauge } from "./ui.jsx";
-
+import PartnershipIntelligence from "./PartnershipIntelligence.jsx";
 
 /* ---------- module: Overview ---------- */
 function Overview({ go }) {
@@ -1665,6 +1666,8 @@ const MODULES = [
   { id: "winprob", label: "Win Probability", icon: "M3 12a9 9 0 1 0 18 0 9 9 0 0 0-18 0zm9-5v5l3 2", c: WinProb, title: "Win Probability", sub: "Notebook 04: the live chase model, in one match and across all" },
   { id: "evidence", label: "Model Evidence", icon: "M5 3v18h16M9 15l3-4 3 3 4-6", c: Evidence, title: "Model Evidence", sub: "Notebook 06 results with intervals" },
   { id: "players", label: "Player Impact", icon: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm-8 9a8 8 0 0 1 16 0", c: Players, title: "Player Impact", sub: "Notebook 05: do playing XIs add signal?" },
+  { id: "partnerships", label: "Partnership Intelligence", icon: "M12 3v18M3 12h18M7 7l10 10M17 7L7 17", c: PartnershipIntelligence, title: "Partnership Intelligence", sub: "Explore batting partnerships, pair performance and season trends" },
+  { id: "player-intelligence", label: "Player Intelligence", icon: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm-8 9a8 8 0 0 1 16 0", c: PlayerIntelligence, title: "Player Intelligence", sub: "All-season player profiles, performance and scouting" },
   { id: "explorer", label: "Data Explorer", icon: "M4 6h16M4 12h16M4 18h10", c: Explorer, title: "Data Explorer", sub: "Seasons, venues, teams and scoring by over" },
   { id: "models", label: "Model Cards", icon: "M4 5h16v14H4zM4 10h16M9 10v9", c: Models, title: "Model Cards", sub: "What each notebook built and where it stops" },
   { id: "method", label: "Data & Method", icon: "M12 3v18M3 12h18M6 6l12 12", c: Method, title: "Data & Method", sub: "How the evaluation is set up" },

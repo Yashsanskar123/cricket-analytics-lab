@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import math
+from statistics import median, pstdev
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -141,6 +142,301 @@ def as_int(value):
         return 0
 
 
+def phase_for_over(over_no):
+    """Return the standard IPL innings phase for a 1-based over number."""
+    if over_no <= 6:
+        return "Powerplay"
+    if over_no <= 15:
+        return "Middle"
+    return "Death"
+
+
+def finalize_progression(over_buckets, batter1, batter2):
+    """Finalize per-over progression and phase summaries for one partnership."""
+    progression = []
+    phase_map = {}
+    cumulative_runs = 0
+    cumulative_balls = 0
+    for over_no in sorted(over_buckets):
+        item = over_buckets[over_no]
+        cumulative_runs += item["runs"]
+        cumulative_balls += item["legal_balls"]
+        progression.append({
+            "over": over_no,
+            "phase": phase_for_over(over_no),
+            "runs": item["runs"],
+            "legal_balls": item["legal_balls"],
+            "deliveries": item.get("deliveries", item.get("legal_balls", 0)),
+            "batter1_runs": item["batter_runs"].get(batter1, 0),
+            "batter2_runs": item["batter_runs"].get(batter2, 0),
+            "extras": item["extras"],
+            "dot_balls": item["dot_balls"],
+            "fours": item["fours"],
+            "sixes": item["sixes"],
+            "dot_ball_pct": round(item["dot_balls"] * 100 / item.get("deliveries", item.get("legal_balls", 0)), 2) if item.get("deliveries", item.get("legal_balls", 0)) else None,
+            "cumulative_runs": cumulative_runs,
+            "cumulative_legal_balls": cumulative_balls,
+        })
+        phase = phase_for_over(over_no)
+        agg = phase_map.setdefault(phase, {
+            "phase": phase, "runs": 0, "legal_balls": 0,
+            "batter1_runs": 0, "batter2_runs": 0, "extras": 0,
+            "dot_balls": 0, "fours": 0, "sixes": 0, "deliveries": 0, "overs": [],
+        })
+        agg["runs"] += item["runs"]
+        agg["legal_balls"] += item["legal_balls"]
+        agg["batter1_runs"] += item["batter_runs"].get(batter1, 0)
+        agg["batter2_runs"] += item["batter_runs"].get(batter2, 0)
+        for key in ("extras", "dot_balls", "fours", "sixes"):
+            agg[key] += item[key]
+        agg["deliveries"] += item.get("deliveries", item.get("legal_balls", 0))
+        agg["overs"].append(over_no)
+
+    phase_splits = []
+    for phase in ("Powerplay", "Middle", "Death"):
+        if phase not in phase_map:
+            continue
+        item = phase_map[phase]
+        balls = item["legal_balls"]
+        phase_splits.append({
+            **item,
+            "run_rate": round(item["runs"] * 6 / balls, 3) if balls else None,
+            "over_count": len(item["overs"]),
+            "dot_ball_pct": round(item["dot_balls"] * 100 / item["deliveries"], 2) if item["deliveries"] else None,
+        })
+    return progression, phase_splits
+
+
+
+def build_pair_intelligence(partnerships):
+    """Build career pair rankings plus season/team/opposition/venue splits."""
+    grouped = defaultdict(list)
+    contexts = defaultdict(list)
+    for row in partnerships:
+        pair_key = tuple(sorted((row.get("batter1", "Unknown"), row.get("batter2", "Unknown"))))
+        grouped[pair_key].append(row)
+        for dimension in ("season", "team", "opposition", "venue"):
+            contexts[(pair_key, dimension, row.get(dimension))].append(row)
+
+    def summarize(rows, pair_key, dimension=None, value=None):
+        runs = [int(r.get("runs", 0)) for r in rows]
+        balls = sum(int(r.get("balls", 0)) for r in rows)
+        total_runs = sum(runs)
+        batter_runs = sum(int(r.get("batter1_runs", 0)) + int(r.get("batter2_runs", 0)) for r in rows)
+        result = {
+            "batter1": pair_key[0], "batter2": pair_key[1],
+            "pair": f"{pair_key[0]} & {pair_key[1]}",
+            "partnerships": len(rows),
+            "matches": len({r.get("match_id") for r in rows if r.get("match_id")}),
+            "runs": total_runs, "balls": balls,
+            "average_runs": round(total_runs / len(rows), 3) if rows else None,
+            "run_rate": round(total_runs * 6 / balls, 3) if balls else None,
+            "fifties": sum(runs_value >= 50 for runs_value in runs),
+            "hundreds": sum(runs_value >= 100 for runs_value in runs),
+            "best_partnership": max(runs, default=0),
+            "median_partnership": round(median(runs), 3) if runs else None,
+            "partnership_runs_stddev": round(pstdev(runs), 3) if len(runs) > 1 else 0.0,
+            "batter_runs": batter_runs,
+            "extras": sum(int(r.get("extras", 0)) for r in rows),
+            "batter_contribution_pct": round(batter_runs * 100 / total_runs, 2) if total_runs else None,
+            "not_out_partnerships": sum(not r.get("ended_by_wicket", False) for r in rows),
+            "wins": len({r.get("match_id") for r in rows if r.get("team_won") and r.get("match_id")}),
+            "win_rate_pct": round(len({r.get("match_id") for r in rows if r.get("team_won") and r.get("match_id")}) * 100 / len({r.get("match_id") for r in rows if r.get("match_id")}), 2) if any(r.get("match_id") for r in rows) else None,
+            "boundary_runs": sum(int(r.get("boundary_runs", int(r.get("fours", 0)) * 4 + int(r.get("sixes", 0)) * 6)) for r in rows),
+        }
+        if dimension is not None:
+            result["dimension"] = dimension
+            result["value"] = value
+        return result
+
+    pair_rows = [summarize(rows, pair_key) for pair_key, rows in grouped.items()]
+    pair_rows.sort(key=lambda x: (x["runs"], x["partnerships"]), reverse=True)
+    context_rows = [summarize(rows, pair_key, dimension, value)
+                    for (pair_key, dimension, value), rows in contexts.items()]
+    context_rows.sort(key=lambda x: (x["dimension"], str(x["value"]), -x["runs"]))
+    return pair_rows, context_rows
+
+
+def build_team_opposition_intelligence(partnerships):
+    """Aggregate partnership output by team, season and opposition contexts."""
+    buckets = {
+        "team": defaultdict(list),
+        "team_season": defaultdict(list),
+        "team_opposition": defaultdict(list),
+        "team_opposition_season": defaultdict(list),
+    }
+    for row in partnerships:
+        team = row.get("team") or "Unknown"
+        opposition = row.get("opposition") or "Unknown"
+        season = row.get("season")
+        buckets["team"][team].append(row)
+        buckets["team_season"][(team, season)].append(row)
+        buckets["team_opposition"][(team, opposition)].append(row)
+        buckets["team_opposition_season"][(team, opposition, season)].append(row)
+
+    def summarize(rows, dimensions):
+        runs = [int(r.get("runs", 0)) for r in rows]
+        balls = sum(int(r.get("balls", 0)) for r in rows)
+        match_ids = {r.get("match_id") for r in rows if r.get("match_id")}
+        wins = {r.get("match_id") for r in rows if r.get("team_won") and r.get("match_id")}
+        total_runs = sum(runs)
+        batter_runs = sum(int(r.get("batter1_runs", 0)) + int(r.get("batter2_runs", 0)) for r in rows)
+        extras = sum(int(r.get("extras", 0)) for r in rows)
+        legal_balls = balls
+        deliveries = sum(int(r.get("deliveries", 0)) for r in rows)
+        boundaries = sum(int(r.get("boundary_runs", 4 * int(r.get("fours", 0)) + 6 * int(r.get("sixes", 0)))) for r in rows)
+        best = max(rows, key=lambda r: int(r.get("runs", 0)), default=None)
+        return {
+            **dimensions,
+            "partnerships": len(rows),
+            "matches": len(match_ids),
+            "runs": total_runs,
+            "balls": legal_balls,
+            "average_runs": round(total_runs / len(rows), 3) if rows else None,
+            "run_rate": round(total_runs * 6 / legal_balls, 3) if legal_balls else None,
+            "best_partnership": int(best.get("runs", 0)) if best else 0,
+            "best_pair": best.get("pair") if best else None,
+            "best_match_id": best.get("match_id") if best else None,
+            "fifties": sum(value >= 50 for value in runs),
+            "hundreds": sum(value >= 100 for value in runs),
+            "not_out_partnerships": sum(not r.get("ended_by_wicket", False) for r in rows),
+            "wins": len(wins),
+            "win_rate_pct": round(len(wins) * 100 / len(match_ids), 2) if match_ids else None,
+            "batter_runs": batter_runs,
+            "extras": extras,
+            "batter_contribution_pct": round(batter_runs * 100 / total_runs, 2) if total_runs else None,
+            "extras_pct": round(extras * 100 / total_runs, 2) if total_runs else None,
+            "boundary_runs": boundaries,
+            "boundary_run_pct": round(boundaries * 100 / total_runs, 2) if total_runs else None,
+            "dot_balls": sum(int(r.get("dot_balls", 0)) for r in rows),
+            "deliveries": deliveries,
+            "dot_ball_pct": round(sum(int(r.get("dot_balls", 0)) for r in rows) * 100 / deliveries, 2) if deliveries else None,
+        }
+
+    output = {}
+    for name, groups in buckets.items():
+        rows = []
+        for key, records in groups.items():
+            if name == "team":
+                dimensions = {"team": key}
+            elif name == "team_season":
+                dimensions = {"team": key[0], "season": key[1]}
+            elif name == "team_opposition":
+                dimensions = {"team": key[0], "opposition": key[1]}
+            else:
+                dimensions = {"team": key[0], "opposition": key[1], "season": key[2]}
+            rows.append(summarize(records, dimensions))
+        rows.sort(key=lambda x: (x["runs"], x["partnerships"]), reverse=True)
+        output[name] = rows
+    return output
+
+
+
+def build_venue_and_wicket_intelligence(partnerships):
+    """Build venue and wicket-position aggregates from partnership records."""
+    venue_groups = {
+        "venue": defaultdict(list),
+        "venue_season": defaultdict(list),
+        "venue_team": defaultdict(list),
+        "venue_opposition": defaultdict(list),
+    }
+    wicket_groups = {
+        "wicket": defaultdict(list),
+        "wicket_team": defaultdict(list),
+        "wicket_phase": defaultdict(list),
+    }
+
+    for row in partnerships:
+        venue = row.get("venue") or "Unknown venue"
+        team = row.get("team") or "Unknown"
+        opposition = row.get("opposition") or "Unknown"
+        season = row.get("season")
+        for name, key in (("venue", venue), ("venue_season", (venue, season)),
+                          ("venue_team", (venue, team)),
+                          ("venue_opposition", (venue, opposition))):
+            venue_groups[name][key].append(row)
+
+        wicket = int(row.get("wicket_number") or 0)
+        wicket_groups["wicket"][wicket].append(row)
+        wicket_groups["wicket_team"][(wicket, team)].append(row)
+        for split in row.get("phase_splits", []):
+            wicket_groups["wicket_phase"][(wicket, split.get("phase", "Unknown"))].append((row, split))
+
+    def summarize(rows, dimensions):
+        runs = [int(r.get("runs", 0)) for r in rows]
+        total = sum(runs)
+        balls = sum(int(r.get("balls", 0)) for r in rows)
+        matches = {r.get("match_id") for r in rows if r.get("match_id")}
+        wins = {r.get("match_id") for r in rows if r.get("team_won") and r.get("match_id")}
+        best = max(rows, key=lambda r: int(r.get("runs", 0)), default=None)
+        deliveries = sum(int(r.get("deliveries", 0)) for r in rows)
+        dots = sum(int(r.get("dot_balls", 0)) for r in rows)
+        extras = sum(int(r.get("extras", 0)) for r in rows)
+        boundary_runs = sum(int(r.get("boundary_runs", 4 * int(r.get("fours", 0)) + 6 * int(r.get("sixes", 0)))) for r in rows)
+        return {
+            **dimensions, "partnerships": len(rows), "matches": len(matches),
+            "runs": total, "balls": balls,
+            "average_runs": round(total / len(rows), 3) if rows else None,
+            "run_rate": round(total * 6 / balls, 3) if balls else None,
+            "best_partnership": int(best.get("runs", 0)) if best else 0,
+            "best_pair": best.get("pair") if best else None,
+            "best_match_id": best.get("match_id") if best else None,
+            "fifties": sum(x >= 50 for x in runs), "hundreds": sum(x >= 100 for x in runs),
+            "not_out_partnerships": sum(not r.get("ended_by_wicket", False) for r in rows),
+            "wins": len(wins), "win_rate_pct": round(len(wins) * 100 / len(matches), 2) if matches else None,
+            "extras": extras, "extras_pct": round(extras * 100 / total, 2) if total else None,
+            "dot_balls": dots, "deliveries": deliveries,
+            "dot_ball_pct": round(dots * 100 / deliveries, 2) if deliveries else None,
+            "boundary_runs": boundary_runs,
+            "boundary_run_pct": round(boundary_runs * 100 / total, 2) if total else None,
+        }
+
+    venue_output = {}
+    for name, groups in venue_groups.items():
+        rows_out = []
+        for key, rows in groups.items():
+            if name == "venue": dims = {"venue": key}
+            elif name == "venue_season": dims = {"venue": key[0], "season": key[1]}
+            elif name == "venue_team": dims = {"venue": key[0], "team": key[1]}
+            else: dims = {"venue": key[0], "opposition": key[1]}
+            rows_out.append(summarize(rows, dims))
+        rows_out.sort(key=lambda x: (x["runs"], x["partnerships"]), reverse=True)
+        venue_output[name] = rows_out
+
+    wicket_output = []
+    for wicket, rows in sorted(wicket_groups["wicket"].items()):
+        item = summarize(rows, {"wicket_number": wicket})
+        item["dismissal_ended_partnerships"] = sum(bool(r.get("ended_by_wicket")) for r in rows)
+        item["unfinished_partnerships"] = sum(not bool(r.get("ended_by_wicket")) for r in rows)
+        item["innings_1_partnerships"] = sum(int(r.get("innings", 0)) == 1 for r in rows)
+        item["innings_2_partnerships"] = sum(int(r.get("innings", 0)) == 2 for r in rows)
+        wicket_output.append(item)
+
+    wicket_team_output = []
+    for (wicket, team), rows in sorted(wicket_groups["wicket_team"].items()):
+        wicket_team_output.append(summarize(rows, {"wicket_number": wicket, "team": team}))
+
+    wicket_phase_output = []
+    for (wicket, phase), records in sorted(wicket_groups["wicket_phase"].items()):
+        rows = [row for row, _ in records]
+        splits = [split for _, split in records]
+        runs = sum(int(x.get("runs", 0)) for x in splits)
+        balls = sum(int(x.get("legal_balls", 0)) for x in splits)
+        wicket_phase_output.append({
+            "wicket_number": wicket, "phase": phase, "partnership_phase_segments": len(splits),
+            "matches": len({r.get("match_id") for r in rows if r.get("match_id")}),
+            "runs": runs, "legal_balls": balls,
+            "average_runs_per_segment": round(runs / len(splits), 3) if splits else None,
+            "run_rate": round(runs * 6 / balls, 3) if balls else None,
+        })
+
+    return {
+        **{f"{name}_intelligence" if name == "venue" else f"{name}_intelligence": rows for name, rows in venue_output.items()},
+        "wicket_intelligence": wicket_output,
+        "wicket_team_intelligence": wicket_team_output,
+        "wicket_phase_intelligence": wicket_phase_output,
+    }
+
 def person_name(raw_name, registry, reverse_registry):
     """Resolve a Cricsheet player value to a display name.
 
@@ -168,10 +464,6 @@ def main():
     season_set = set()
     team_set = set()
     venue_set = set()
-    pair_agg = defaultdict(lambda: {
-        "partnerships": 0, "runs": 0, "balls": 0, "not_out": 0,
-        "fifties": 0, "hundreds": 0, "wins": 0, "matches": set()
-    })
     wicket_agg = defaultdict(lambda: {"partnerships": 0, "runs": 0, "balls": 0})
     match_winners = {}
 
@@ -222,11 +514,11 @@ def main():
                 extras_total = 0
                 wickets_fallen = 0
                 partnership_number = 0
-                innings_runs = 0
+                over_buckets = {}
 
                 def close_partnership(completed_by_wicket=False):
                     nonlocal partnership_number, partnership_runs, partnership_balls
-                    nonlocal batter_runs, batter_balls, fours, sixes, dots, extras_total
+                    nonlocal batter_runs, batter_balls, fours, sixes, dots, extras_total, over_buckets
                     if not active_pair:
                         return
                     a, b = active_pair
@@ -234,8 +526,11 @@ def main():
                         return
                     partnership_number += 1
                     total = partnership_runs
+                    actual_wicket_number = wickets_fallen + 1
+                    over_progression, phase_splits = finalize_progression(over_buckets, a, b)
                     row = {
                         "id": f"{match_id}-{innings_index}-{partnership_number}",
+                        "partnership_number": partnership_number,
                         "match_id": match_id,
                         "date": date,
                         "season": season,
@@ -246,7 +541,7 @@ def main():
                         "opposition": next((t for t in teams if t != batting_team), "Unknown"),
                         "opposition_original": next((t for t in teams_original if t != batting_team_original), "Unknown"),
                         "innings": innings_index,
-                        "wicket_number": partnership_number,
+                        "wicket_number": actual_wicket_number,
                         "batter1": a,
                         "batter2": b,
                         "pair": f"{a} & {b}",
@@ -261,20 +556,23 @@ def main():
                         "fours": fours,
                         "sixes": sixes,
                         "dot_balls": dots,
+                        "deliveries": sum(x.get("deliveries", x.get("legal_balls", 0)) for x in over_buckets.values()),
+                        "start_over": min(over_buckets) if over_buckets else None,
+                        "end_over": max(over_buckets) if over_buckets else None,
+                        "duration_overs": len(over_buckets),
+                        "boundary_runs": fours * 4 + sixes * 6,
+                        "boundary_count": fours + sixes,
+                        "boundary_run_pct": round((fours * 4 + sixes * 6) * 100 / total, 2) if total else None,
+                        "dot_ball_pct": round(dots * 100 / sum(x.get("deliveries", x.get("legal_balls", 0)) for x in over_buckets.values()), 2) if sum(x.get("deliveries", x.get("legal_balls", 0)) for x in over_buckets.values()) else None,
+                        "extras_pct": round(extras_total * 100 / total, 2) if total else None,
+                        "batter1_contribution_pct": round(batter_runs.get(a, 0) * 100 / total, 2) if total else None,
+                        "batter2_contribution_pct": round(batter_runs.get(b, 0) * 100 / total, 2) if total else None,
                         "ended_by_wicket": bool(completed_by_wicket),
+                        "over_progression": over_progression,
+                        "phase_splits": phase_splits,
                     }
                     partnerships.append(row)
-                    # Aggregate the same pair together regardless of batting order.
-                    key = tuple(sorted((a, b)))
-                    agg = pair_agg[key]
-                    agg["partnerships"] += 1
-                    agg["runs"] += total
-                    agg["balls"] += partnership_balls
-                    agg["not_out"] += 0 if completed_by_wicket else 1
-                    agg["fifties"] += int(total >= 50)
-                    agg["hundreds"] += int(total >= 100)
-                    agg["matches"].add(match_id)
-                    wa = wicket_agg[partnership_number]
+                    wa = wicket_agg[actual_wicket_number]
                     wa["partnerships"] += 1
                     wa["runs"] += total
                     wa["balls"] += partnership_balls
@@ -283,6 +581,7 @@ def main():
                     batter_runs = defaultdict(int)
                     batter_balls = defaultdict(int)
                     fours = sixes = dots = extras_total = 0
+                    over_buckets = {}
 
                 for over_no, delivery in deliveries_for(innings):
                     striker_raw = delivery.get("batter", delivery.get("batsman"))
@@ -312,8 +611,22 @@ def main():
                     extras = max(0, total_run - batter_run)
                     legal_ball = wides == 0 and no_balls == 0
 
+                    # Store delivery-level contributions within this partnership's over.
+                    over_item = over_buckets.setdefault(over_no, {
+                        "runs": 0, "legal_balls": 0, "deliveries": 0, "batter_runs": defaultdict(int),
+                        "extras": 0, "dot_balls": 0, "fours": 0, "sixes": 0,
+                    })
+                    over_item["runs"] += total_run
+                    over_item["legal_balls"] += int(legal_ball)
+                    over_item["deliveries"] += 1
+                    over_item["extras"] += extras
+                    over_item["dot_balls"] += int(total_run == 0)
+                    over_item["fours"] += int(batter_run == 4)
+                    over_item["sixes"] += int(batter_run == 6)
+                    if striker_raw:
+                        over_item["batter_runs"][striker] += batter_run
+
                     partnership_runs += total_run
-                    innings_runs += total_run
                     extras_total += extras
                     if legal_ball:
                         partnership_balls += 1
@@ -356,18 +669,9 @@ def main():
     for row in partnerships:
         row["team_won"] = match_winners.get(row["match_id"]) == row["team"]
 
-    pair_rows = []
-    for (a, b), agg in pair_agg.items():
-        pair_rows.append({
-            "batter1": a, "batter2": b, "pair": f"{a} & {b}",
-            "partnerships": agg["partnerships"], "matches": len(agg["matches"]),
-            "runs": agg["runs"], "balls": agg["balls"],
-            "average_runs": round(agg["runs"] / agg["partnerships"], 3) if agg["partnerships"] else None,
-            "run_rate": round(agg["runs"] * 6 / agg["balls"], 3) if agg["balls"] else None,
-            "fifties": agg["fifties"], "hundreds": agg["hundreds"],
-            "not_out_partnerships": agg["not_out"],
-        })
-    pair_rows.sort(key=lambda x: (x["runs"], x["partnerships"]), reverse=True)
+    pair_rows, pair_contexts = build_pair_intelligence(partnerships)
+    team_opposition_data = build_team_opposition_intelligence(partnerships)
+    venue_wicket_data = build_venue_and_wicket_intelligence(partnerships)
 
     wicket_rows = []
     for wicket, agg in sorted(wicket_agg.items()):
@@ -388,6 +692,67 @@ def main():
             store[key]["runs"] += row["runs"]
             store[key]["balls"] += row["balls"]
             store[key]["matches"].add(row["match_id"])
+
+    # Phase-level partnership records and aggregates for phase/team/season/opposition/venue analysis.
+    phase_partnerships = []
+    phase_agg = defaultdict(lambda: {
+        "partnerships": 0, "runs": 0, "balls": 0, "extras": 0,
+        "dot_balls": 0, "fours": 0, "sixes": 0, "matches": set(),
+    })
+    phase_context = defaultdict(lambda: {
+        "partnerships": 0, "runs": 0, "balls": 0, "matches": set(),
+    })
+    for row in partnerships:
+        for split in row.get("phase_splits", []):
+            phase_row = {
+                "partnership_id": row["id"], "match_id": row["match_id"],
+                "date": row["date"], "season": row["season"],
+                "team": row["team"], "opposition": row["opposition"],
+                "venue": row["venue"], "innings": row["innings"],
+                "wicket_number": row["wicket_number"],
+                "batter1": row["batter1"], "batter2": row["batter2"],
+                "pair": row["pair"], **split,
+            }
+            phase_partnerships.append(phase_row)
+            agg = phase_agg[split["phase"]]
+            agg["partnerships"] += 1
+            agg["runs"] += split["runs"]
+            agg["balls"] += split["legal_balls"]
+            for key in ("extras", "dot_balls", "fours", "sixes"):
+                agg[key] += split[key]
+            agg["matches"].add(row["match_id"])
+            for dimension, value in (("team", row["team"]), ("season", row["season"]),
+                                     ("opposition", row["opposition"]), ("venue", row["venue"])):
+                ctx = phase_context[(split["phase"], dimension, value)]
+                ctx["partnerships"] += 1
+                ctx["runs"] += split["runs"]
+                ctx["balls"] += split["legal_balls"]
+                ctx["matches"].add(row["match_id"])
+
+    by_phase = []
+    for phase in ("Powerplay", "Middle", "Death"):
+        if phase not in phase_agg:
+            continue
+        agg = phase_agg[phase]
+        by_phase.append({
+            "phase": phase, "partnerships": agg["partnerships"],
+            "matches": len(agg["matches"]), "runs": agg["runs"],
+            "balls": agg["balls"],
+            "average_runs": round(agg["runs"] / agg["partnerships"], 3) if agg["partnerships"] else None,
+            "run_rate": round(agg["runs"] * 6 / agg["balls"], 3) if agg["balls"] else None,
+            "extras": agg["extras"], "dot_balls": agg["dot_balls"],
+            "fours": agg["fours"], "sixes": agg["sixes"],
+        })
+
+    by_phase_context = []
+    for (phase, dimension, value), agg in phase_context.items():
+        by_phase_context.append({
+            "phase": phase, "dimension": dimension, "value": value,
+            "partnerships": agg["partnerships"], "matches": len(agg["matches"]),
+            "runs": agg["runs"], "balls": agg["balls"],
+            "average_runs": round(agg["runs"] / agg["partnerships"], 3) if agg["partnerships"] else None,
+            "run_rate": round(agg["runs"] * 6 / agg["balls"], 3) if agg["balls"] else None,
+        })
 
     def finalize_context(store, key_name):
         out = []
@@ -412,6 +777,12 @@ def main():
                 "Partnership runs include all team runs scored while the pair was together, including extras.",
                 "Partnership balls count legal deliveries only (wides and no-balls excluded).",
                 "A partnership closes on a recorded dismissal; unfinished final partnerships are retained.",
+                "Wicket number is based on wickets already fallen; partnership_number is a separate sequence within the innings.",
+                "Phase boundaries are overs 1-6 Powerplay, 7-15 Middle, and 16+ Death.",
+                "Over progression records only deliveries faced while the partnership was active; one over may appear in multiple partnerships.",
+                "Team and opposition summaries aggregate partnership records; win rate is based on distinct matches represented in those records.",
+                "Team-opposition summaries are directional: team is the batting side and opposition is the opposing franchise.",
+                "Venue and wicket intelligence are derived from completed partnership records; wicket phase rows represent phase segments, not unique partnerships.",
                 "Pair identity is ordered as the two batters at the start of that partnership.",
                 "Records cover the first two non-super-over innings only.",
                 "Canonical team and venue labels are used for analytics; original source labels are retained in *_original fields."
@@ -419,9 +790,24 @@ def main():
         },
         "partnerships": partnerships,
         "pairs": pair_rows,
+        "pair_contexts": pair_contexts,
+        "team_intelligence": team_opposition_data["team"],
+        "team_season_intelligence": team_opposition_data["team_season"],
+        "opposition_intelligence": team_opposition_data["team_opposition"],
+        "team_opposition_season": team_opposition_data["team_opposition_season"],
+        "venue_intelligence": venue_wicket_data["venue_intelligence"],
+        "venue_season_intelligence": venue_wicket_data["venue_season_intelligence"],
+        "venue_team_intelligence": venue_wicket_data["venue_team_intelligence"],
+        "venue_opposition_intelligence": venue_wicket_data["venue_opposition_intelligence"],
+        "wicket_intelligence": venue_wicket_data["wicket_intelligence"],
+        "wicket_team_intelligence": venue_wicket_data["wicket_team_intelligence"],
+        "wicket_phase_intelligence": venue_wicket_data["wicket_phase_intelligence"],
         "by_wicket": wicket_rows,
         "by_team": finalize_context(team_rows, "team"),
         "by_venue": finalize_context(venue_rows, "venue"),
+        "by_phase": by_phase,
+        "phase_partnerships": phase_partnerships,
+        "by_phase_context": by_phase_context,
         "errors": errors,
     }
     OUT.parent.mkdir(parents=True, exist_ok=True)

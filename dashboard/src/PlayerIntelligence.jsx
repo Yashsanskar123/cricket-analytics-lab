@@ -1,20 +1,52 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
-  BarChart, Bar, Legend,
+  BarChart, Bar, Legend, RadarChart, Radar, PolarGrid, PolarAngleAxis,
+  PolarRadiusAxis, AreaChart, Area, PieChart, Pie, Cell,
 } from "recharts";
 import "./player-intelligence.css";
 
-const fmt = (v, d = 1) => v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d);
-const nfmt = (v) => Number(v || 0).toLocaleString("en-IN");
+const COLORS = ["#6C63FF", "#19B5A5", "#FF9F43", "#EC6090", "#4D9DE0", "#A78BFA"];
 const PHASES = ["Powerplay", "Middle", "Death"];
-const EMPTY_LINE = { runs: 0, balls: 0, dismissals: 0, fours: 0, sixes: 0, wickets: 0, runs_conceded: 0, dots: 0, dot_balls: 0, boundary_runs: 0 };
+const fmt = (v, d = 1) => v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d);
+const num = (v) => Number(v || 0);
+const compact = (v) => num(v).toLocaleString("en-IN");
+const safePct = (v) => v == null ? "—" : `${fmt(v, 0)}%`;
+const initials = (name = "") => name.split(/\s+/).slice(0, 2).map(x => x[0] || "").join("").toUpperCase();
+const getStats = (player, season) => {
+  if (!player) return { batting: {}, bowling: {}, battingIntel: {}, bowlingIntel: {}, seasons: [] };
+  const seasons = player.season_stats || [];
+  if (season === "all") return {
+    batting: player.batting || {}, bowling: player.bowling || {},
+    battingIntel: player.batting_intelligence || {}, bowlingIntel: player.bowling_intelligence || {},
+    seasons,
+  };
+  const row = seasons.find(x => String(x.season) === String(season));
+  return {
+    batting: row?.batting || {}, bowling: row?.bowling || {},
+    battingIntel: row?.batting_intelligence || {}, bowlingIntel: row?.bowling_intelligence || {},
+    seasons: row ? [row] : [],
+  };
+};
+const metricLabel = (key) => ({
+  "batting.average": "Batting average", "batting.strike_rate": "Strike rate",
+  "batting.dot_pct": "Batting dot-ball rate", "batting.boundary_pct": "Boundary rate",
+  "bowling.economy": "Bowling economy", "bowling.average": "Bowling average",
+  "bowling.strike_rate": "Bowling strike rate", "bowling.dot_pct": "Bowling dot-ball rate",
+}[key] || key);
+const metricValue = (player, key) => {
+  const [section, field] = key.split(".");
+  return player?.[section]?.[field];
+};
 
-function statsFor(player, season) {
-  if (!player) return { batting: EMPTY_LINE, bowling: EMPTY_LINE, seasonStats: [] };
-  if (season === "all") return { batting: player.batting || EMPTY_LINE, bowling: player.bowling || EMPTY_LINE, seasonStats: player.season_stats || [] };
-  const row = (player.season_stats || []).find((x) => String(x.season) === String(season));
-  return { batting: row?.batting || EMPTY_LINE, bowling: row?.bowling || EMPTY_LINE, seasonStats: row ? [row] : [] };
+function MetricCard({ label, value, note, tone = "violet", suffix = "" }) {
+  return <div className={`pi-metric pi-tone-${tone}`}><span>{label}</span><strong>{value == null ? "—" : `${value}${suffix}`}</strong>{note && <small>{note}</small>}</div>;
+}
+function SectionTitle({ eyebrow, title, note, action }) {
+  return <div className="pi-section-title"><div><span className="pi-eyebrow">{eyebrow}</span><h3>{title}</h3>{note && <p>{note}</p>}</div>{action}</div>;
+}
+function EmptyState({ title, detail }) {
+  return <div className="pi-empty-state"><div className="pi-empty-icon">✦</div><b>{title}</b><span>{detail}</span></div>;
 }
 
 export default function PlayerIntelligence() {
@@ -26,104 +58,209 @@ export default function PlayerIntelligence() {
   const [sort, setSort] = useState("runs");
   const [selectedId, setSelectedId] = useState("");
   const [compareIds, setCompareIds] = useState([]);
-  const [tab, setTab] = useState("overview");
-  const [matchupQuery, setMatchupQuery] = useState("");
+  const [view, setView] = useState("discover");
+  const [matchupSearch, setMatchupSearch] = useState("");
+  const [targetId, setTargetId] = useState("");
+  const [teamName, setTeamName] = useState("");
+  const [teamSeason, setTeamSeason] = useState("all");
+  const [showAllPlayers, setShowAllPlayers] = useState(false);
 
   useEffect(() => {
     fetch("/data/player_intelligence.json", { cache: "no-store" })
-      .then((r) => { if (!r.ok) throw new Error("Player export not found. Run the Python pipeline first."); return r.json(); })
-      .then((j) => { setData(j); setSelectedId(j.players?.[0]?.id || ""); })
-      .catch((e) => setError(e.message));
+      .then(r => { if (!r.ok) throw new Error("Player intelligence export not found. Run python player_intelligence_pipeline.py first."); return r.json(); })
+      .then(j => { setData(j); setSelectedId(j.players?.[0]?.id || ""); setTargetId(j.players?.[0]?.id || ""); })
+      .catch(e => setError(e.message));
   }, []);
 
   const players = data?.players || [];
   const seasons = data?.meta?.seasons || [];
+  const recruitment = data?.recruitment || {};
+  const teamSquads = recruitment.team_squads || [];
   const phaseRows = data?.phase_splits || [];
-  const matchups = data?.matchups || [];
+  const seasonMatchups = data?.matchups || [];
+  const careerMatchups = data?.career_matchups || [];
+  const phaseMatchups = data?.phase_matchups || [];
 
-  const filtered = useMemo(() => players.filter((p) => {
-    const seasonOk = season === "all" || (p.season_stats || []).some((x) => String(x.season) === String(season));
-    const roleOk = role === "all" || p.role === role;
-    const queryOk = !query.trim() || p.name.toLowerCase().includes(query.trim().toLowerCase());
-    return seasonOk && roleOk && queryOk;
+  const filtered = useMemo(() => players.filter(p => {
+    const q = query.trim().toLowerCase();
+    const seasonOk = season === "all" || (p.season_stats || []).some(x => String(x.season) === String(season));
+    return seasonOk && (role === "all" || p.role === role) && (!q || p.name.toLowerCase().includes(q));
   }).sort((a, b) => {
-    const av = statsFor(a, season), bv = statsFor(b, season);
-    const aa = sort === "wickets" ? av.bowling.wickets : sort === "sr" ? (av.batting.strike_rate || 0) : sort === "average" ? (av.batting.average || 0) : sort === "economy" ? -(av.bowling.economy || 0) : av.batting.runs;
-    const bb = sort === "wickets" ? bv.bowling.wickets : sort === "sr" ? (bv.batting.strike_rate || 0) : sort === "average" ? (bv.batting.average || 0) : sort === "economy" ? -(bv.bowling.economy || 0) : bv.batting.runs;
-    return bb - aa;
+    const A = getStats(a, season), B = getStats(b, season);
+    const av = sort === "wickets" ? num(A.bowling.wickets) : sort === "sr" ? num(A.batting.strike_rate) :
+      sort === "average" ? num(A.batting.average) : sort === "economy" ? -num(A.bowling.economy) : num(A.batting.runs);
+    const bv = sort === "wickets" ? num(B.bowling.wickets) : sort === "sr" ? num(B.batting.strike_rate) :
+      sort === "average" ? num(B.batting.average) : sort === "economy" ? -num(B.bowling.economy) : num(B.batting.runs);
+    return bv - av;
   }), [players, season, role, query, sort]);
 
   useEffect(() => {
-    if (filtered.length && !filtered.some((p) => p.id === selectedId)) setSelectedId(filtered[0].id);
+    if (filtered.length && !filtered.some(p => p.id === selectedId)) setSelectedId(filtered[0].id);
   }, [filtered, selectedId]);
 
-  const selected = filtered.find((p) => p.id === selectedId) || filtered[0] || null;
-  const selectedStats = statsFor(selected, season);
-  const selectedBat = selectedStats.batting;
-  const selectedBowl = selectedStats.bowling;
-  const selectedSeasonStats = selectedStats.seasonStats;
+  const selected = players.find(p => p.id === selectedId) || filtered[0] || null;
+  const selectedStats = getStats(selected, season);
+  const bat = selectedStats.batting, bowl = selectedStats.bowling;
+  const comparePlayers = compareIds.map(id => players.find(p => p.id === id)).filter(Boolean);
+  const target = players.find(p => p.id === targetId) || selected;
+  const targetCandidates = target?.recruitment?.replacement_candidates || [];
+  const teamOptions = [...new Set(teamSquads.map(x => x.team))].sort();
+  const selectedTeamRows = teamSquads.filter(x => (!teamName || x.team === teamName) && (teamSeason === "all" || String(x.season) === String(teamSeason)));
+  const selectedPhases = PHASES.map(phase => {
+    const rows = phaseRows.filter(x => x.player_id === selected?.id && x.phase === phase && (season === "all" || String(x.season) === String(season)));
+    const battingRuns = rows.reduce((a, x) => a + num(x.batting?.runs), 0);
+    const bowlingWickets = rows.reduce((a, x) => a + num(x.bowling?.wickets), 0);
+    const battingBalls = rows.reduce((a, x) => a + num(x.batting?.balls), 0);
+    const bowlingBalls = rows.reduce((a, x) => a + num(x.bowling?.balls), 0);
+    const conceded = rows.reduce((a, x) => a + num(x.bowling?.runs_conceded), 0);
+    return { phase, runs: battingRuns, wickets: bowlingWickets,
+      strikeRate: battingBalls ? battingRuns * 100 / battingBalls : 0,
+      economy: bowlingBalls ? conceded * 6 / bowlingBalls : 0 };
+  });
+  const matchupRows = useMemo(() => {
+    const source = season === "all" ? careerMatchups : seasonMatchups.filter(x => String(x.season) === String(season));
+    return source.filter(x => x.batter_id === selected?.id || x.bowler_id === selected?.id)
+      .filter(x => !matchupSearch || (x.batter_id === selected?.id ? x.bowler : x.batter).toLowerCase().includes(matchupSearch.toLowerCase()))
+      .sort((a, b) => num(b.balls) - num(a.balls)).slice(0, 80);
+  }, [careerMatchups, seasonMatchups, selected?.id, season, matchupSearch]);
 
-  const selectedPhases = useMemo(() => PHASES.map((phase) => {
-    const rows = phaseRows.filter((x) => x.player_id === selected?.id && x.phase === phase && (season === "all" || String(x.season) === String(season)));
-    const bat = rows.reduce((a, x) => { for (const k of ["runs", "balls", "fours", "sixes", "dismissals", "dot_balls"]) a[k] = (a[k] || 0) + (x.batting?.[k] || 0); return a; }, {});
-    const bowl = rows.reduce((a, x) => { for (const k of ["runs_conceded", "balls", "wickets", "dots"]) a[k] = (a[k] || 0) + (x.bowling?.[k] || 0); return a; }, {});
-    return { phase, runs: bat.runs || 0, balls: bat.balls || 0, strike_rate: bat.balls ? 100 * bat.runs / bat.balls : 0, wickets: bowl.wickets || 0, economy: bowl.balls ? 6 * bowl.runs_conceded / bowl.balls : 0 };
-  }), [phaseRows, selected?.id, season]);
+  const compareMetrics = useMemo(() => {
+    const keys = [...new Set(comparePlayers.flatMap(p => Object.keys(p.peer_percentiles || {})))];
+    return keys.map(key => ({ metric: metricLabel(key), key, ...Object.fromEntries(comparePlayers.map(p => [p.name, p.peer_percentiles?.[key] ?? 0])) }));
+  }, [comparePlayers]);
 
-  const selectedMatchups = useMemo(() => matchups
-    .filter((m) => m.batter_id === selected?.id || m.bowler_id === selected?.id)
-    .filter((m) => season === "all" || String(m.season) === String(season))
-    .filter((m) => !matchupQuery || (m.batter_id === selected?.id ? m.bowler : m.batter).toLowerCase().includes(matchupQuery.toLowerCase()))
-    .sort((a, b) => b.balls - a.balls).slice(0, 50), [matchups, selected?.id, season, matchupQuery]);
+  const phaseMatchupRows = phaseMatchups.filter(x =>
+    (x.batter_id === selected?.id || x.bowler_id === selected?.id) &&
+    (season === "all" || String(x.season) === String(season))
+  );
+  const phaseMatchupSummary = PHASES.map(phase => {
+    const rows = phaseMatchupRows.filter(x => x.phase === phase);
+    return { phase, runs: rows.reduce((a, x) => a + num(x.runs), 0),
+      dismissals: rows.reduce((a, x) => a + num(x.dismissals), 0),
+      balls: rows.reduce((a, x) => a + num(x.balls), 0) };
+  });
 
-  const comparePlayers = compareIds.map((id) => filtered.find((p) => p.id === id)).filter(Boolean);
+  const toggleCompare = (id) => setCompareIds(old => old.includes(id) ? old.filter(x => x !== id) : old.length < 4 ? [...old, id] : [...old.slice(1), id]);
   const kpis = [
-    ["Player profiles", nfmt(players.length)], ["Matches parsed", nfmt(data?.meta?.matches_parsed)],
-    ["Season coverage", seasons.length ? `${seasons[0]}–${seasons[seasons.length - 1]}` : "—"], ["Batter–bowler records", nfmt(matchups.length)],
+    { label: "Player profiles", value: compact(players.length), color: "violet", icon: "◉" },
+    { label: "Matches analysed", value: compact(data?.meta?.matches_parsed), color: "cyan", icon: "▦" },
+    { label: "Seasons covered", value: seasons.length ? `${seasons[0]}–${seasons[seasons.length - 1]}` : "—", color: "orange", icon: "◷" },
+    { label: "Matchup records", value: compact(seasonMatchups.length), color: "pink", icon: "⇄" },
   ];
 
-  if (error) return <div className="pi-shell"><div className="pi-empty"><h2>Player Intelligence data unavailable</h2><p>{error}</p><p>Run <code>python player_intelligence_pipeline.py</code> from the project root, then refresh.</p></div></div>;
-  if (!data) return <div className="pi-shell"><div className="pi-empty">Loading player intelligence…</div></div>;
+  if (error) return <div className="pi-shell"><div className="pi-empty-state"><b>Player Intelligence could not load</b><span>{error}</span><code>python player_intelligence_pipeline.py</code></div></div>;
+  if (!data) return <div className="pi-shell"><div className="pi-loading"><span className="pi-spinner"/> Loading your scouting workspace…</div></div>;
 
   return <div className="pi-shell">
-    <section className="pi-hero">
-      <div><div className="pi-eyebrow">CRICKET ANALYTICS LAB <span>/</span> SCOUTING INTELLIGENCE</div><h2>Player Intelligence</h2><p>Explore player output, role profiles, phase impact and head-to-head matchups across the IPL archive.</p></div>
-      <div className="pi-hero-meta"><span className="pi-live-dot"/> CRICSHEET BALL-BY-BALL <b>{data.meta.generated?.slice(0, 10)}</b></div>
-    </section>
-    <section className="pi-kpis">{kpis.map(([label, value]) => <div className="pi-kpi" key={label}><span>{label}</span><b>{value}</b></div>)}</section>
-
-    <section className="pi-controlbar">
-      <div className="pi-control-heading"><div><span className="pi-eyebrow">SCOUTING CONTROLS</span><b>Global filters</b></div><button className="pi-reset" onClick={() => { setSeason("all"); setRole("all"); setQuery(""); setSort("runs"); setMatchupQuery(""); }}>Reset all</button></div>
-      <div className="pi-filters">
-        <label className="pi-search"><span>Search player</span><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search by player name…" /></label>
-        <label><span>Season · applies to every panel</span><select value={season} onChange={(e) => setSeason(e.target.value)}><option value="all">All IPL seasons</option>{seasons.map((s) => <option key={s} value={s}>{s}</option>)}</select></label>
-        <label><span>Player role</span><select value={role} onChange={(e) => setRole(e.target.value)}><option value="all">All roles</option>{["Batter", "Bowler", "All-rounder", "Other"].map((x) => <option key={x} value={x}>{x}</option>)}</select></label>
-        <label><span>Rank players by</span><select value={sort} onChange={(e) => setSort(e.target.value)}><option value="runs">Most runs</option><option value="wickets">Most wickets</option><option value="average">Batting average</option><option value="sr">Strike rate</option><option value="economy">Bowling economy</option></select></label>
+    <header className="pi-hero">
+      <div className="pi-hero-copy"><div className="pi-eyebrow">CRICKET ANALYTICS LAB <span>/</span> IPL SCOUTING STUDIO</div>
+        <h2>Player Intelligence <em>Studio</em></h2>
+        <p>Find the right player, understand their game, compare their impact and build evidence-led recruitment shortlists.</p>
+        <div className="pi-hero-chips"><span>● Ball-by-ball data</span><span>✦ Role-aware intelligence</span><span>↗ 2008–2026 archive</span></div>
       </div>
-      <div className="pi-filter-note">{season === "all" ? "Showing career totals and all-season matchup records." : `Every player statistic, phase split, comparison and matchup is scoped to IPL ${season}.`} <b>{filtered.length.toLocaleString("en-IN")} players</b> match the current filters.</div>
+      <div className="pi-hero-orbit" aria-hidden="true"><div className="pi-orbit pi-orbit-one"/><div className="pi-orbit pi-orbit-two"/><div className="pi-orbit-core">IPL<br/><b>IQ</b></div><span className="pi-orbit-dot dot-a"/><span className="pi-orbit-dot dot-b"/><span className="pi-orbit-dot dot-c"/></div>
+      <div className="pi-generated">DATA REFRESHED <b>{data.meta.generated?.slice(0, 10) || "—"}</b></div>
+    </header>
+
+    <section className="pi-kpis">{kpis.map((x, i) => <div className={`pi-kpi pi-kpi-${x.color}`} key={x.label}><div className="pi-kpi-icon">{x.icon}</div><div><span>{x.label}</span><b>{x.value}</b></div><i>{String(i + 1).padStart(2, "0")}</i></div>)}</section>
+
+    <section className="pi-command">
+      <div className="pi-command-title"><div><span className="pi-eyebrow">WORKSPACE CONTROLS</span><b>Shape your scouting view</b></div><button className="pi-quiet-btn" onClick={() => { setQuery(""); setRole("all"); setSeason("all"); setSort("runs"); setMatchupSearch(""); }}>↺ Reset filters</button></div>
+      <div className="pi-filter-grid">
+        <label className="pi-searchbox"><span>⌕</span><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search any IPL player…" /></label>
+        <label><small>SEASON</small><select value={season} onChange={e => setSeason(e.target.value)}><option value="all">Career · all seasons</option>{seasons.map(s => <option key={s} value={s}>IPL {s}</option>)}</select></label>
+        <label><small>PLAYER ROLE</small><select value={role} onChange={e => setRole(e.target.value)}><option value="all">All roles</option>{["Batter", "Bowler", "All-rounder", "Other"].map(x => <option key={x}>{x}</option>)}</select></label>
+        <label><small>RANK BY</small><select value={sort} onChange={e => setSort(e.target.value)}><option value="runs">Most runs</option><option value="wickets">Most wickets</option><option value="average">Batting average</option><option value="sr">Strike rate</option><option value="economy">Bowling economy</option></select></label>
+      </div>
+      <div className="pi-filter-foot"><span>Filters update player discovery, profile context and comparisons.</span><b>{compact(filtered.length)} players in view</b></div>
     </section>
 
-    <div className="pi-layout">
-      <aside className="pi-directory"><div className="pi-panel-head"><div><b>Player directory</b><small>Ranked by {sort === "runs" ? "runs" : sort === "wickets" ? "wickets" : sort === "sr" ? "strike rate" : sort === "average" ? "average" : "economy"}</small></div><span className="pi-count">{filtered.length}</span></div>
-        <div className="pi-player-list">{filtered.map((p, i) => { const st = statsFor(p, season); const score = sort === "wickets" ? nfmt(st.bowling.wickets) : sort === "sr" ? fmt(st.batting.strike_rate, 0) : sort === "average" ? fmt(st.batting.average, 1) : sort === "economy" ? fmt(st.bowling.economy, 1) : nfmt(st.batting.runs); return <button key={p.id} className={`pi-player-row ${selected?.id === p.id ? "active" : ""}`} onClick={() => setSelectedId(p.id)}><span className="pi-rank">{String(i + 1).padStart(2, "0")}</span><span className="pi-player-ident"><b>{p.name}</b><small>{p.role} <i>·</i> {p.matches} matches</small></span><span className="pi-player-score">{score}</span></button>; })}{!filtered.length && <div className="pi-empty-small">No players match these filters.</div>}</div>
-      </aside>
+    <nav className="pi-workspace-nav" aria-label="Player intelligence sections">
+      {[["discover","⌕","Discover"],["profile","◉","Player profile"],["compare","⇄","Compare"],["scouting","✦","Scouting"],["recruitment","♜","Recruitment"],["matchups","⚡","Matchups"]].map(([id, icon, label]) =>
+        <button key={id} className={view === id ? "active" : ""} onClick={() => setView(id)}><span>{icon}</span>{label}</button>)}
+    </nav>
 
-      {selected ? <main className="pi-profile">
-        <section className="pi-profile-head"><div><span className={`pi-tag pi-role-${selected.role.toLowerCase().replace(/[^a-z]+/g, "-")}`}>{selected.role}</span><h3>{selected.name}</h3><p>{selected.matches} matches in indexed data <i>·</i> {season === "all" ? `${selected.seasons?.[0]}–${selected.seasons?.[selected.seasons.length - 1]}` : `IPL ${season} season view`}</p></div><button className={`pi-compare-btn ${compareIds.includes(selected.id) ? "selected" : ""}`} onClick={() => setCompareIds((old) => old.includes(selected.id) ? old.filter((x) => x !== selected.id) : [...old, selected.id].slice(-4))}>{compareIds.includes(selected.id) ? "✓ In comparison" : "+ Add to compare"}</button></section>
-        <nav className="pi-tabs">{[["overview", "Overview"], ["batting", "Batting"], ["bowling", "Bowling"], ["matchups", "Matchups"], ["compare", "Compare"]].map(([id, label]) => <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}>{label}</button>)}</nav>
+    {view === "discover" && <section className="pi-view">
+      <SectionTitle eyebrow="PLAYER DISCOVERY" title="Find your next match-winner" note="Explore the player pool, then open any profile to understand the numbers behind the name." action={<span className="pi-result-pill">{filtered.length} results</span>}/>
+      <div className="pi-discovery-layout">
+        <div className="pi-player-grid">{filtered.slice(0, showAllPlayers ? 120 : 24).map((p, index) => {
+          const st = getStats(p, season); const active = p.id === selected?.id;
+          const primary = p.role === "Bowler" ? `${compact(st.bowling.wickets)} wkts` : `${compact(st.batting.runs)} runs`;
+          const secondary = p.role === "Bowler" ? `Econ ${fmt(st.bowling.economy, 2)}` : `SR ${fmt(st.batting.strike_rate, 1)}`;
+          return <article className={`pi-player-card ${active ? "is-active" : ""}`} key={p.id} onClick={() => setSelectedId(p.id)}>
+            <div className="pi-player-card-top"><div className={`pi-avatar avatar-${index % 6}`}>{initials(p.name)}</div><span className={`pi-role-pill role-${p.role.toLowerCase().replace(/[^a-z]+/g,"-")}`}>{p.role}</span></div>
+            <h4>{p.name}</h4><p>{p.matches} appearances <span>·</span> {p.seasons?.length || 0} seasons</p>
+            <div className="pi-player-card-stat"><strong>{primary}</strong><span>{secondary}</span></div>
+            <div className="pi-card-actions"><button onClick={e => { e.stopPropagation(); setSelectedId(p.id); setView("profile"); }}>Explore profile ↗</button><button className={compareIds.includes(p.id) ? "chosen" : ""} onClick={e => { e.stopPropagation(); toggleCompare(p.id); }} title="Add to comparison">{compareIds.includes(p.id) ? "✓" : "+"}</button></div>
+          </article>;
+        })}{!filtered.length && <EmptyState title="No players found" detail="Try clearing a filter or searching another name."/>}</div>
+        {filtered.length > 24 && <button className="pi-load-more" onClick={() => setShowAllPlayers(v => !v)}>{showAllPlayers ? "Show fewer players" : `Show more players (${filtered.length - 24} remaining)`}</button>}
+        <aside className="pi-discovery-aside"><div className="pi-aside-gradient"><span>SCOUTING TIP</span><b>Start with a role, then explore the numbers.</b><p>Career filters help you understand long-term output. A single-season filter helps isolate form in that campaign.</p><button onClick={() => { setRole("Batter"); setSort("sr"); }}>Explore batters →</button></div>
+          <div className="pi-aside-card"><span className="pi-eyebrow">CURRENT LEADER</span><b>{filtered[0]?.name || "—"}</b><strong>{sort === "wickets" ? `${compact(getStats(filtered[0], season).bowling.wickets)} wickets` : `${compact(getStats(filtered[0], season).batting.runs)} runs`}</strong><small>Based on your selected ranking</small><button onClick={() => { if (filtered[0]) { setSelectedId(filtered[0].id); setView("profile"); } }}>Open profile ↗</button></div>
+          <div className="pi-aside-note"><b>How to read this</b><span>Role labels are inferred from sustained batting and bowling workload. They are not official squad positions.</span></div>
+        </aside>
+      </div>
+    </section>}
 
-        {tab === "overview" && <>
-          <div className="pi-stat-grid"><div><span>Runs scored</span><b>{nfmt(selectedBat.runs)}</b><small>{nfmt(selectedBat.balls)} balls faced</small></div><div><span>Batting average</span><b>{fmt(selectedBat.average, 2)}</b><small>Runs per dismissal</small></div><div><span>Strike rate</span><b>{fmt(selectedBat.strike_rate, 1)}</b><small>{nfmt(selectedBat.fours)} fours · {nfmt(selectedBat.sixes)} sixes</small></div><div><span>Wickets</span><b>{nfmt(selectedBowl.wickets)}</b><small>Bowler-credited wickets</small></div><div><span>Bowling economy</span><b>{fmt(selectedBowl.economy, 2)}</b><small>{selectedBowl.overs || "0.0"} overs</small></div><div><span>Boundary runs</span><b>{nfmt(selectedBat.boundary_runs)}</b><small>Runs from fours and sixes</small></div></div>
-          <div className="pi-chart-grid"><div className="pi-card"><div className="pi-card-title"><div><b>Season batting trend</b><small>{season === "all" ? "Career timeline" : `Selected season: ${season}`}</small></div></div><div className="pi-chart"><ResponsiveContainer><LineChart data={selectedSeasonStats}><CartesianGrid strokeDasharray="3 3" stroke="var(--pi-grid)"/><XAxis dataKey="season"/><YAxis/><Tooltip/><Legend/><Line type="monotone" dataKey="batting.runs" name="Runs" stroke="#5687ee" strokeWidth={2.5} dot={false}/><Line type="monotone" dataKey="batting.strike_rate" name="Strike rate" stroke="#e4a64b" strokeWidth={2} dot={false}/></LineChart></ResponsiveContainer></div></div>
-            <div className="pi-card"><div className="pi-card-title"><div><b>Phase impact</b><small>Powerplay · Middle · Death</small></div></div><div className="pi-chart"><ResponsiveContainer><BarChart data={selectedPhases}><CartesianGrid strokeDasharray="3 3" stroke="var(--pi-grid)"/><XAxis dataKey="phase"/><YAxis/><Tooltip/><Legend/><Bar dataKey="runs" name="Batting runs" fill="#5687ee" radius={[5, 5, 0, 0]}/><Bar dataKey="wickets" name="Bowling wickets" fill="#25a987" radius={[5, 5, 0, 0]}/></BarChart></ResponsiveContainer></div></div></div>
-          <div className="pi-card"><div className="pi-card-title"><div><b>Season performance ledger</b><small>Season selector above controls this table too</small></div></div><div className="pi-table-wrap"><table><thead><tr><th>Season</th><th>Runs</th><th>Avg</th><th>SR</th><th>4s</th><th>6s</th><th>Wickets</th><th>Economy</th></tr></thead><tbody>{selectedSeasonStats.map((x) => <tr key={x.season}><td>{x.season}</td><td>{nfmt(x.batting.runs)}</td><td>{fmt(x.batting.average, 2)}</td><td>{fmt(x.batting.strike_rate, 1)}</td><td>{x.batting.fours}</td><td>{x.batting.sixes}</td><td>{x.bowling.wickets}</td><td>{fmt(x.bowling.economy, 2)}</td></tr>)}</tbody></table></div></div>
-        </>}
-        {tab === "batting" && <div className="pi-card"><div className="pi-card-title"><div><b>Batting profile</b><small>{season === "all" ? "Career totals" : `IPL ${season} only`}</small></div></div><div className="pi-stat-grid"><div><span>Runs</span><b>{nfmt(selectedBat.runs)}</b></div><div><span>Average</span><b>{fmt(selectedBat.average, 2)}</b></div><div><span>Strike rate</span><b>{fmt(selectedBat.strike_rate, 2)}</b></div><div><span>Balls faced</span><b>{nfmt(selectedBat.balls)}</b></div><div><span>Fours / Sixes</span><b>{selectedBat.fours || 0} / {selectedBat.sixes || 0}</b></div><div><span>Dot-ball rate</span><b>{fmt(selectedBat.dot_pct, 1)}%</b></div></div></div>}
-        {tab === "bowling" && <div className="pi-card"><div className="pi-card-title"><div><b>Bowling profile</b><small>{season === "all" ? "Career totals" : `IPL ${season} only`}</small></div></div><div className="pi-stat-grid"><div><span>Wickets</span><b>{nfmt(selectedBowl.wickets)}</b></div><div><span>Economy</span><b>{fmt(selectedBowl.economy, 2)}</b></div><div><span>Average</span><b>{fmt(selectedBowl.average, 2)}</b></div><div><span>Strike rate</span><b>{fmt(selectedBowl.strike_rate, 2)}</b></div><div><span>Dot-ball rate</span><b>{fmt(selectedBowl.dot_pct, 1)}%</b></div><div><span>Overs</span><b>{selectedBowl.overs || "0.0"}</b></div></div><div className="pi-chart"><ResponsiveContainer><BarChart data={selectedPhases}><CartesianGrid strokeDasharray="3 3" stroke="var(--pi-grid)"/><XAxis dataKey="phase"/><YAxis/><Tooltip/><Legend/><Bar dataKey="wickets" name="Wickets" fill="#25a987"/><Bar dataKey="economy" name="Economy" fill="#e4a64b"/></BarChart></ResponsiveContainer></div></div>}
-        {tab === "matchups" && <div className="pi-card"><div className="pi-card-title"><div><b>Head-to-head matchup explorer</b><small>{season === "all" ? "All seasons" : `IPL ${season}`} · bowler-credited dismissals only</small></div><input className="pi-inline-search" value={matchupQuery} onChange={(e) => setMatchupQuery(e.target.value)} placeholder="Filter opponent…"/></div><div className="pi-table-wrap"><table><thead><tr><th>Opponent</th><th>Season</th><th>Role</th><th>Balls</th><th>Runs</th><th>Dismissals</th><th>SR</th><th>Average</th></tr></thead><tbody>{selectedMatchups.map((m, i) => { const batting = m.batter_id === selected.id; return <tr key={`${m.batter_id}-${m.bowler_id}-${m.season}-${i}`}><td>{batting ? m.bowler : m.batter}</td><td>{m.season}</td><td>{batting ? "Bowler faced" : "Batter bowled to"}</td><td>{m.balls}</td><td>{m.runs}</td><td>{m.dismissals}</td><td>{fmt(m.strike_rate, 1)}</td><td>{fmt(m.average, 1)}</td></tr>; })}</tbody></table>{!selectedMatchups.length && <div className="pi-empty-small">No matchup records for this player and season.</div>}</div></div>}
-        {tab === "compare" && <div className="pi-card"><div className="pi-card-title"><div><b>Player comparison</b><small>Up to four players · current season filter applies to every comparison</small></div><button className="pi-reset" onClick={() => setCompareIds([])}>Clear</button></div>{comparePlayers.length < 2 ? <p className="pi-empty-small">Add at least two players from the directory. Players outside the current filters are excluded.</p> : <><div className="pi-compare-grid">{comparePlayers.map((p) => { const st = statsFor(p, season); return <div key={p.id}><b>{p.name}</b><span>{p.role}</span><strong>{nfmt(st.batting.runs)} runs</strong><small>Avg {fmt(st.batting.average, 1)} · SR {fmt(st.batting.strike_rate, 1)}</small><small>{st.bowling.wickets} wkts · Econ {fmt(st.bowling.economy, 2)}</small><button onClick={() => setCompareIds((old) => old.filter((x) => x !== p.id))}>Remove</button></div>; })}</div><div className="pi-chart"><ResponsiveContainer><BarChart data={comparePlayers.map((p) => { const st = statsFor(p, season); return { player: p.name, runs: st.batting.runs, wickets: st.bowling.wickets }; })}><CartesianGrid strokeDasharray="3 3" stroke="var(--pi-grid)"/><XAxis dataKey="player"/><YAxis/><Tooltip/><Legend/><Bar dataKey="runs" name="Runs" fill="#5687ee"/><Bar dataKey="wickets" name="Wickets" fill="#25a987"/></BarChart></ResponsiveContainer></div></>}</div>}
-      </main> : <div className="pi-no-selection">No players match the current filters. Clear a filter or choose another season.</div>}
-    </div>
-    <div className="pi-footnote">Role labels are workload-based estimates, not official squad designations. Batting balls faced exclude wides; bowler balls exclude wides and no-balls. Matchup dismissals count bowler-credited wickets only. Phase boundaries: overs 1–6, 7–15 and 16–20.</div>
+    {view === "profile" && (selected ? <section className="pi-view">
+      <div className="pi-profile-banner"><div className="pi-profile-person"><div className="pi-avatar pi-avatar-large">{initials(selected.name)}</div><div><span className={`pi-role-pill role-${selected.role.toLowerCase().replace(/[^a-z]+/g,"-")}`}>{selected.role}</span><h3>{selected.name}</h3><p>{selected.matches} indexed appearances · {selected.seasons?.[0]}–{selected.seasons?.[selected.seasons.length - 1]}</p></div></div><div className="pi-profile-actions"><button className="pi-secondary-btn" onClick={() => toggleCompare(selected.id)}>{compareIds.includes(selected.id) ? "✓ Added to compare" : "+ Add to compare"}</button><button className="pi-primary-btn" onClick={() => setView("scouting")}>Open scouting report ↗</button></div></div>
+      <div className="pi-profile-kpis">
+        <MetricCard label="Runs scored" value={compact(bat.runs)} note={`${compact(bat.balls)} balls faced`} tone="violet"/>
+        <MetricCard label="Batting average" value={fmt(bat.average,2)} note="Runs per dismissal" tone="cyan"/>
+        <MetricCard label="Strike rate" value={fmt(bat.strike_rate,1)} note="Runs per 100 balls" tone="orange"/>
+        <MetricCard label="Wickets" value={compact(bowl.wickets)} note="Bowler-credited" tone="pink"/>
+        <MetricCard label="Economy" value={fmt(bowl.economy,2)} note={`${bowl.overs || "0.0"} overs`} tone="green"/>
+      </div>
+      <div className="pi-profile-grid">
+        <div className="pi-panel pi-panel-wide"><SectionTitle eyebrow="PERFORMANCE JOURNEY" title="Season-by-season form" note="See how output has changed across campaigns."/>
+          <div className="pi-chart pi-chart-tall"><ResponsiveContainer><AreaChart data={selectedStats.seasons.map(x => ({season:x.season,runs:num(x.batting.runs),wickets:num(x.bowling.wickets),sr:num(x.batting.strike_rate)}))}><defs><linearGradient id="runsFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#6C63FF" stopOpacity={.35}/><stop offset="100%" stopColor="#6C63FF" stopOpacity={0}/></linearGradient></defs><CartesianGrid strokeDasharray="3 3" stroke="var(--pi-grid)"/><XAxis dataKey="season"/><YAxis/><Tooltip/><Area type="monotone" dataKey="runs" name="Runs" stroke="#6C63FF" fill="url(#runsFill)" strokeWidth={3}/><Line type="monotone" dataKey="wickets" name="Wickets" stroke="#19B5A5" strokeWidth={2} yAxisId={0}/></AreaChart></ResponsiveContainer></div>
+        </div>
+        <div className="pi-panel"><SectionTitle eyebrow="ROLE PROFILE" title="Peer percentile snapshot" note="Percentiles compare this player with the same inferred role."/>
+          {Object.keys(selected.peer_percentiles || {}).length ? <div className="pi-percentile-list">{Object.entries(selected.peer_percentiles).map(([key, value]) => <div className="pi-percentile-row" key={key}><div><span>{metricLabel(key)}</span><b>{fmt(value,0)}th</b></div><div className="pi-progress"><i style={{width:`${Math.max(0,Math.min(100,value))}%`}}/></div></div>)}</div> : <EmptyState title="Not enough peer data" detail="Percentiles are hidden when the role group does not meet the minimum peer threshold."/>}
+        </div>
+        <div className="pi-panel"><SectionTitle eyebrow="PHASE SPECIALISATION" title="Where impact happens" note="Batting runs and bowling wickets by match phase."/>
+          <div className="pi-chart"><ResponsiveContainer><BarChart data={selectedPhases}><CartesianGrid strokeDasharray="3 3" stroke="var(--pi-grid)"/><XAxis dataKey="phase"/><YAxis/><Tooltip/><Legend/><Bar dataKey="runs" name="Batting runs" fill="#6C63FF" radius={[6,6,0,0]}/><Bar dataKey="wickets" name="Bowling wickets" fill="#19B5A5" radius={[6,6,0,0]}/></BarChart></ResponsiveContainer></div>
+        </div>
+        <div className="pi-panel"><SectionTitle eyebrow="BATTING SNAPSHOT" title="Scoring profile" note="A quick view of how runs are accumulated."/>
+          <div className="pi-chart"><ResponsiveContainer><PieChart><Pie data={[{name:"Fours",value:num(bat.fours)},{name:"Sixes",value:num(bat.sixes)},{name:"Other runs",value:Math.max(0,num(bat.runs)-4*num(bat.fours)-6*num(bat.sixes))}]} dataKey="value" nameKey="name" innerRadius={55} outerRadius={86} paddingAngle={3}><Cell fill="#6C63FF"/><Cell fill="#FF9F43"/><Cell fill="#D9DCE8"/></Pie><Tooltip/><Legend/></PieChart></ResponsiveContainer></div>
+        </div>
+      </div>
+    </section> : <EmptyState title="Choose a player" detail="Select a player from Discover to open their profile."/>)}
+
+    {view === "compare" && <section className="pi-view">
+      <SectionTitle eyebrow="COMPARISON LAB" title="Compare players on equal terms" note="Add up to four players from Discover. Percentiles are role-aware, so each player is assessed against their own peer group." action={<button className="pi-quiet-btn" onClick={() => setCompareIds([])}>Clear selection</button>}/>
+      <div className="pi-compare-picker">{players.filter(p => compareIds.includes(p.id)).map(p => <span key={p.id}>{p.name}<button onClick={() => toggleCompare(p.id)}>×</button></span>)}<small>{compareIds.length}/4 selected · Add players using the + button on discovery cards.</small></div>
+      {comparePlayers.length >= 2 ? <div className="pi-compare-layout"><div className="pi-panel"><SectionTitle eyebrow="ROLE-AWARE METRICS" title="Peer percentile comparison" note="100 means higher within the player's own inferred role group."/><div className="pi-chart pi-chart-tall"><ResponsiveContainer><BarChart data={compareMetrics} layout="vertical" margin={{left:20,right:20}}><CartesianGrid strokeDasharray="3 3" stroke="var(--pi-grid)"/><XAxis type="number" domain={[0,100]}/><YAxis type="category" dataKey="metric" width={125} tick={{fontSize:10}}/><Tooltip/><Legend/>{comparePlayers.map((p,i)=><Bar key={p.id} dataKey={p.name} fill={COLORS[i%COLORS.length]} radius={[0,5,5,0]}/>)}</BarChart></ResponsiveContainer></div></div><div className="pi-compare-cards">{comparePlayers.map((p,i)=>{const st=getStats(p,season);return <div className="pi-compare-card" key={p.id} style={{"--player-color":COLORS[i%COLORS.length]}}><div className="pi-compare-card-top"><span className="pi-avatar">{initials(p.name)}</span><button onClick={()=>toggleCompare(p.id)}>×</button></div><b>{p.name}</b><small>{p.role}</small><strong>{compact(st.batting.runs)} <em>runs</em></strong><div>Avg {fmt(st.batting.average,1)} · SR {fmt(st.batting.strike_rate,1)}</div><div>{compact(st.bowling.wickets)} wkts · Econ {fmt(st.bowling.economy,2)}</div></div>})}</div></div> : <EmptyState title="Build your comparison" detail="Go to Discover and add at least two players. You can compare up to four at once."/>}
+    </section>}
+
+    {view === "scouting" && (selected ? <section className="pi-view">
+      <SectionTitle eyebrow="SCOUTING REPORT" title="Turn performance into a player story" note="Evidence-led archetypes, strengths and development areas based on career output and role-matched percentiles." action={<button className="pi-secondary-btn" onClick={()=>setView("profile")}>← Back to profile</button>}/>
+      <div className="pi-scout-hero"><div className="pi-avatar pi-avatar-large">{initials(selected.name)}</div><div><span className={`pi-role-pill role-${selected.role.toLowerCase().replace(/[^a-z]+/g,"-")}`}>{selected.role}</span><h3>{selected.name}</h3><p>{selected.scouting?.basis || "Descriptive profile from career statistics."}</p></div></div>
+      <div className="pi-scout-grid"><div className="pi-panel"><SectionTitle eyebrow="PLAYER ARCHETYPES" title="What kind of player?"/><div className="pi-chip-cloud">{(selected.scouting?.archetypes || []).length ? selected.scouting.archetypes.map(x=><span className="pi-archetype" key={x}>✦ {x}</span>) : <EmptyState title="No archetype assigned" detail="The player does not currently meet a defined workload and performance threshold."/>}</div></div>
+        <div className="pi-panel"><SectionTitle eyebrow="RELATIVE STRENGTHS" title="Where they stand out"/><div className="pi-insight-list good">{(selected.scouting?.strengths || []).length ? selected.scouting.strengths.map(x=><div key={x}><b>↗</b><span>{metricLabel(x)}</span><strong>{fmt(selected.peer_percentiles?.[x],0)}th percentile</strong></div>) : <EmptyState title="No standout percentile flags" detail="No metric currently crosses the 75th percentile threshold."/>}</div></div>
+        <div className="pi-panel"><SectionTitle eyebrow="DEVELOPMENT SIGNALS" title="Areas to investigate"/><div className="pi-insight-list watch">{(selected.scouting?.development_areas || []).length ? selected.scouting.development_areas.map(x=><div key={x}><b>↘</b><span>{metricLabel(x)}</span><strong>{fmt(selected.peer_percentiles?.[x],0)}th percentile</strong></div>) : <EmptyState title="No low-percentile flags" detail="No metric currently falls at or below the 25th percentile."/>}</div></div>
+        <div className="pi-panel"><SectionTitle eyebrow="SIMILAR PLAYER FINDER" title="Players with a similar profile"/><div className="pi-similar-list">{(selected.similar_players || []).map((p,i)=><button key={p.player_id} onClick={()=>{setSelectedId(p.player_id);setView("profile");}}><span className="pi-similar-rank">0{i+1}</span><span><b>{p.name}</b><small>{p.role} · {p.shared_metrics} shared metrics</small></span><strong>{fmt(p.similarity_distance,1)}</strong><em>View ↗</em></button>)}{!(selected.similar_players || []).length && <EmptyState title="No similar profiles available" detail="The role group needs comparable percentile dimensions."/>}</div></div></div>
+    </section> : <EmptyState title="Select a player" detail="Choose a player to open their scouting report."/>)}
+
+    {view === "recruitment" && <section className="pi-view">
+      <SectionTitle eyebrow="RECRUITMENT DESK" title="Find a like-for-like replacement" note="Select a target player to see the closest same-role statistical profiles from the indexed IPL archive."/>
+      <div className="pi-recruit-controls"><label><small>TARGET PLAYER</small><select value={target?.id || ""} onChange={e=>setTargetId(e.target.value)}>{players.filter(p=>["Batter","Bowler","All-rounder"].includes(p.role)).sort((a,b)=>a.name.localeCompare(b.name)).map(p=><option key={p.id} value={p.id}>{p.name} · {p.role}</option>)}</select></label><div className="pi-target-summary"><span>REPLACEMENT ROLE</span><b>{target?.role || "—"}</b><small>Same inferred role only</small></div><div className="pi-target-summary"><span>CANDIDATES FOUND</span><b>{targetCandidates.length}</b><small>Maximum five per target</small></div></div>
+      {target ? <div className="pi-replacement-grid">{targetCandidates.map((p,i)=>{const candidate=players.find(x=>x.id===p.player_id);return <article className="pi-replacement-card" key={p.player_id}><div className="pi-replacement-rank">MATCH {String(i+1).padStart(2,"0")}</div><div className="pi-avatar">{initials(p.name)}</div><h4>{p.name}</h4><span className="pi-role-pill">{p.role}</span><div className="pi-distance"><b>{fmt(p.similarity_distance,1)}</b><small>percentile distance · lower is closer</small></div><div className="pi-shared-metrics">{(p.shared_metrics||[]).map(x=><span key={x}>{metricLabel(x)}</span>)}</div><button onClick={()=>{setSelectedId(p.player_id);setView("profile");}}>Explore candidate ↗</button></article>})}{!targetCandidates.length && <EmptyState title="No comparable candidates" detail="No same-role peers with shared percentile metrics were available for this player."/>}</div> : <EmptyState title="No eligible target players" detail="The export does not contain a player with a defined specialist role."/>}
+      <div className="pi-method-note"><b>How the shortlist works</b><span>{recruitment.methodology?.replacement_candidates || "Same inferred role; candidates are ranked by distance across shared role-peer percentile metrics."}</span></div>
+      <SectionTitle eyebrow="TEAM SQUAD AUDIT" title="Understand historical squad balance" note="These are players recorded in Cricsheet playing XIs, grouped by team and season—not current squads."/>
+      <div className="pi-team-controls"><label><small>TEAM</small><select value={teamName} onChange={e=>setTeamName(e.target.value)}><option value="">All teams</option>{teamOptions.map(x=><option key={x}>{x}</option>)}</select></label><label><small>SEASON</small><select value={teamSeason} onChange={e=>setTeamSeason(e.target.value)}><option value="all">All seasons</option>{seasons.map(x=><option key={x}>{x}</option>)}</select></label></div>
+      <div className="pi-team-grid">{selectedTeamRows.slice(0,24).map((team,i)=><article className="pi-team-card" key={`${team.team}-${team.season}`}><div className="pi-team-card-head"><span className={`pi-team-mark team-${i%6}`}>{initials(team.team)}</span><div><b>{team.team}</b><small>IPL {team.season}</small></div><strong>{team.players_recorded_in_xi}</strong></div><div className="pi-role-bars">{Object.entries(team.role_counts||{}).filter(([k])=>k!=="Other").map(([k,v])=><div key={k}><span>{k}</span><b>{v}</b><i><em style={{width:`${team.players_recorded_in_xi?100*v/team.players_recorded_in_xi:0}%`}}/></i></div>)}</div><div className={`pi-gap-note ${team.role_coverage_gaps?.length?"has-gap":""}`}>{team.role_coverage_gaps?.length ? `Role coverage flags: ${team.role_coverage_gaps.join(", ")}` : "No missing role category flagged"}</div><details><summary>View recorded roster</summary><div className="pi-roster">{(team.roster||[]).map(p=><span key={p.player_id}>{p.name} <i>{p.role}</i></span>)}</div></details></article>)}</div>
+      <div className="pi-method-note"><b>Important data boundary</b><span>{(recruitment.methodology?.limitations || []).join(" ")}</span></div>
+    </section>}
+
+    {view === "matchups" && (selected ? <section className="pi-view">
+      <SectionTitle eyebrow="MATCHUP INTELLIGENCE" title="Explore batter vs bowler history" note="See who won the contest, how often they met and how the matchup changed by phase."/>
+      <div className="pi-matchup-summary">{phaseMatchupSummary.map((x,i)=><div key={x.phase} className={`pi-phase-card phase-${i}`}><span>{x.phase}</span><b>{compact(x.runs)} <small>runs</small></b><strong>{compact(x.dismissals)} <small>dismissals</small></strong><em>{compact(x.balls)} balls</em></div>)}</div>
+      <div className="pi-panel"><div className="pi-panel-headline"><div><span className="pi-eyebrow">HEAD-TO-HEAD RECORDS</span><h3>{selected.name}'s matchups</h3><p>{season === "all" ? "Career aggregate" : `IPL ${season} only`} · bowler-credited dismissals</p></div><input className="pi-search-inline" value={matchupSearch} onChange={e=>setMatchupSearch(e.target.value)} placeholder="Search opponent…"/></div>
+        <div className="pi-matchup-list">{matchupRows.slice(0,30).map((m,i)=>{const batting=m.batter_id===selected.id;return <div className="pi-matchup-row" key={`${m.batter_id}-${m.bowler_id}-${m.season||"career"}-${i}`}><div className="pi-matchup-versus"><span className="pi-matchup-role">{batting?"BATTER VS BOWLER":"BOWLER VS BATTER"}</span><b>{batting?m.bowler:m.batter}</b><small>{m.season?`IPL ${m.season}`:"Career matchup"}</small></div><div><b>{compact(m.runs)}</b><small>Runs</small></div><div><b>{compact(m.balls)}</b><small>Balls</small></div><div><b>{fmt(m.strike_rate,1)}</b><small>Strike rate</small></div><div><b>{compact(m.dismissals)}</b><small>Dismissals</small></div><div className="pi-matchup-boundary"><b>{compact(m.fours)}×4 · {compact(m.sixes)}×6</b><small>{safePct(m.dot_pct)} dots</small></div></div>})}{!matchupRows.length&&<EmptyState title="No matchup records" detail="No recorded batter-bowler encounters match this player and filter."/>}</div>
+      </div>
+    </section> : <EmptyState title="Choose a player" detail="Select a player from Discover to explore their matchups."/>)}
+
+    <footer className="pi-footer"><span>CRICKET ANALYTICS LAB · PLAYER INTELLIGENCE STUDIO</span><span>Roles are workload-inferred · Percentiles are role-relative · Recruitment outputs are descriptive, not predictions.</span></footer>
   </div>;
 }
